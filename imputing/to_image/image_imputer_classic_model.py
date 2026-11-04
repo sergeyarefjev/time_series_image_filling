@@ -1,3 +1,100 @@
+import numpy as np
+from scipy.ndimage import generic_filter
+
+def adaptive_masked_median_filter(
+    image: np.ndarray,
+    mask: np.ndarray,
+    min_size: int = 3,
+    max_size: int = 21
+) -> np.ndarray:
+    """
+    Адаптивный медианный фильтр, который динамически увеличивает размер окна,
+    если текущее окно полностью состоит из маскированных (NaN) значений.
+
+    Parameters
+    ----------
+    image : np.ndarray
+        Исходное 2D-изображение.
+    mask : np.ndarray
+        Бинарная маска (1 - валидный пиксель, 0 - пропуск/NaN).
+    min_size : int, default=3
+        Стартовый размер окна (должен быть нечетным).
+    max_size : int, default=21
+        Максимально допустимый размер окна для предотвращения чрезмерного размытия.
+
+    Returns
+    -------
+    np.ndarray
+        Отфильтрованное изображение с адаптивно заполненными пропусками.
+    """
+    h, w = image.shape
+    result = image.copy().astype(np.float64)
+
+    # Подготовим матрицу, где пропуски заполнены NaN
+    work_img = image.copy().astype(np.float64)
+    work_img[mask < 0.5] = np.nan
+
+    # Будем заполнять только те пиксели, которые изначально были пропущены
+    missing_y, missing_x = np.where(mask < 0.5)
+
+    for y, x in zip(missing_y, missing_x):
+        current_size = min_size
+        val = np.nan
+
+        # Итеративно увеличиваем окно, пока не найдем хотя бы одно валидное значение
+        while current_size <= max_size:
+            half = current_size // 2
+
+            # Вырезаем локальное окно с учетом границ изображения
+            y_min, y_max = max(0, y - half), min(h, y + half + 1)
+            x_min, x_max = max(0, x - half), min(w, x + half + 1)
+
+            window = work_img[y_min:y_max, x_min:x_max]
+            valid_values = window[~np.isnan(window)]
+
+            if len(valid_values) > 0:
+                val = np.median(valid_values)
+                break # Нашли медиану, выходим из цикла увеличения окна
+
+            current_size += 2 # Увеличиваем размер окна (сохраняя нечетность)
+
+        # Если даже при максимальном окне не нашли валидных точек,
+        # используем глобальную медиану или 0.0
+        if np.isnan(val):
+            global_valid = work_img[~np.isnan(work_img)]
+            result[y, x] = np.median(global_valid) if len(global_valid) > 0 else 0.0
+        else:
+            result[y, x] = val
+
+    return result
+
+def smart_image_inpainting_adaptive_median(
+    img_data: np.ndarray,
+    img_mask: np.ndarray,
+    min_size: int = 3,
+    max_size: int = 15
+) -> np.ndarray:
+    """
+    Инпейнтинг на основе адаптивного медианного фильтра.
+    """
+    img_float = img_data.astype(np.float32)
+
+    if img_float.ndim == 3:
+        filled_channels = []
+        for c in range(img_float.shape[0]):
+            channel = img_float[c]
+            filtered = adaptive_masked_median_filter(channel, img_mask, min_size=min_size, max_size=max_size)
+            channel_filled = channel.copy()
+            channel_filled[img_mask < 0.5] = filtered[img_mask < 0.5]
+            filled_channels.append(channel_filled)
+        return np.stack(filled_channels, axis=0)
+    else:
+        filtered = adaptive_masked_median_filter(img_float, img_mask, min_size=min_size, max_size=max_size)
+        img_filled = img_float.copy()
+        img_filled[img_mask < 0.5] = filtered[img_mask < 0.5]
+        return img_filled
+
+
 class ImageImputer:
     """
     Класс для заполнения пропусков во временных рядах через преобразование в изображения.
